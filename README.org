@@ -1,5 +1,14 @@
 #+title: Plum - A Static site generator based on Guila
-So this is the /Plum/, An /SSG/ that is minimal and kinda similar to /Pelican/ & /Hugo/(And also other /SSGs/), but you can write your content via Scheme(not yet btw :D but we will.)
+So this is the /Plum/, An /SSG/ that is minimal and kinda similar to /Pelican/ & /Hugo/ (And also other /SSGs/ ).
+
+* Architecture
+The project is built using Literate Programming. The source of truth is the
+[[file:docs/][docs/]] directory.
+
+- [[file:docs/parser.org][Parser Module]]: Converts Org text to an AST.
+- [[file:docs/render.org][Render Module]]: Converts the AST to HTML.
+- [[file:docs/template.org][Template Module]]: Template manager and guides about template.
+- [[file:docs/plum.org][CLI Entry Point]]: The main executable.
 
 ** Build & Install
 We use the /gnu Guila/ scheme implementation, so please install it, then follow these instructions:
