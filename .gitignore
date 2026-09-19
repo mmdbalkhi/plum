@@ -1,0 +1,7 @@
+# junks(editor cache, etc)
+*.ss~
+*.ss#*
+.#*.ss
+*.scm~
+*.scm#*
+.#*.scm

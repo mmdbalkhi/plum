@@ -1,0 +1,23 @@
+#+title: Plum - A Static site generator based on Guila
+So this is the /Plum/, An /SSG/ that is minimal and kinda similar to /Pelican/ & /Hugo/(And also other /SSGs/), but you can write your content via Scheme(not yet btw :D but we will.)
+
+** Build & Install
+We use the /gnu Guila/ scheme implementation, so please install it, then follow these instructions:
+
+#+begin_src shell
+% make build
+% make install PREFIX=$HOME/.local  # or what path you want.
+#+end_src
+
+And there you go! It's ready to use! For more information & hacking see docs please(If isn't there, Trust me... It's easy you can do that figure out that without docs.)
+
+** Issues, Contributing and discussion
+
+If you used the /Plum/ and you see any problem or want to request a feature, feel free to create issue, and I'd appreciate it. Also if you're going to create a PR, Do it! I'd be grateful!
+
+If you wanna text me, feel free. you can reach me in telegram ([[https://t.me/mmdbalkhi][t.me/mmdbalkhi]]) or via email ([[mailto:komeilparseh@disroot.org][komeilparseh@disroot.org]]).
+
+# For more information, please read [[./CONTRIBUITING.org][CONTRIBUITING]] file.
+
+** License
+This project is released under the BSD 2-Clause License. For more information, see the [[./LICENSE][LICENSE]] file.
