@@ -1,0 +1,361 @@
+#+title: Org file parser
+#+date: <2026-09-19 Sat>
+#+email: komeilparseh@disroot.org
+#+author: Komeil Parseh
+#+language: en
+#+OPTIONS: toc:3 author:t timestamp:nil auto-id:t
+#+STARTUP: content indent
+#+INCLUDE: _header.org :only-contents t
+#+PROPERTY: header-args:scheme :exports both
+
+This module implements org file parser. The parser implements only a subset of Org mode's syntax and
+features, and is *NOT* intended to be a *ONE-TO-ONE* implementation of Org mode and does not support
+all of its features.
+
+* Supported Org syntax
+:PROPERTIES:
+:ID:       c2d428fd-57c7-41d2-8b24-ccb829544fa2
+:END:
+#+NAME: syntax-table
+| Syntax                   | Meaning                     | Example                          | AST          | Parsed |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| * Headings               |                             |                                  |              |        |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| ~*~                      | Heading 1                   | ~* Hello~                        | ~H1~         | TODO   |
+| ~**~                     | Heading 2                   | ~** Hello~                       | ~H2~         | TODO   |
+| ~***~                    | Heading 3(and so on)        | ~*** Hello~                      | ~H3~         | TODO   |
+| ~* TODO~                 | TODO Keyword                | ~* TODO Buy milk~                | ~TODO~       | TODO   |
+| ~:tag:~                  | Tags                        | ~* Hello :work:~                 | ~Tags~       | TODO   |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| * Lists                  |                             |                                  |              |        |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| ~+~, ~-~, ~*~            | Unordered list              | ~+ item~                         | ~UList/Item~ | TODO   |
+| ~1.~, ~A.~               | Ordered list                | ~1. First~                       | ~OList/Item~ | TODO   |
+| ~Term :: Def~            | Definition list             | ~Emacs :: Editor~                | ~DList/Item~ | TODO   |
+| ~- [ ]~                  | Checkbox empty              | ~- [ ] Buy~                      | ~Chk/Empty~  | TODO   |
+| ~- [-]~                  | Checkbox partial            | ~- [-] Buy~                      | ~Chk/Part~   | TODO   |
+| ~- [X]~                  | Checkbox done               | ~- [X] Buy~                      | ~Chk/Done~   | TODO   |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| * Inline Markup          |                             |                                  |              |        |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| ~*text*~                 | *Bold*                      | ~*hello*~                        | ~Bold~       | TODO   |
+| ~/text/~                 | /Italic/                    | ~/hello/~                        | ~Italic~     | TODO   |
+| ~_text_~                 | _Underline_                 | ~_hello_~                        | ~Underline~  | TODO   |
+| ~+text+~                 | +Strikethrough+             | ~+Hello+~                        | ~Strike~     | TODO   |
+| ~text~                   | ~Code (monospace)~          | =~x=1~=                          | ~Code~       | TODO   |
+| =text=                   | =Verbatim (literal)=        | ~=C-c C-x C-v=~                  | ~Verbatim~   | TODO   |
+| ~$text$~                 | Inline $\LaTeX{}$           | ~$\mathrm{3x^2 \in \mathbb{R}}$~ | ~ILatex~     | TODO   |
+| blank line               | Paragraph boundary          |                                  | ~Paragraph~  | TODO   |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| * Blocks                 |                             |                                  |              |        |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| ~#+BEGIN_SRC~            | Source code block           | ~#+BEGIN_SRC~ $\dots$            | ~SrcBlock~   | TODO   | 
+| ~#BEGIN_EXAMPLE~         | Example block               | ~#+BEGIN_EXAMPLE~ $\dots$        | ~ExBlock~    | TODO   |
+| ~#+BEGIN_QUOTE~          | Quote block                 | ~#+BEGIN_QUOTE~ $\dots$          | ~QuoteBlock~ | TODO   |
+| ~$$text$$~ or ~\[text\]~ | $\LaTeX{}$ Block            | ~$$\mathrm{3x^2 \in R}$$~        | ~Latex~      | TODO   |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| * Links & Tables         |                             |                                  |              |        |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| ~[[url][desc]]~          | Link with desc              | ~[[https://org][Org]]~           | ~Link~       | TODO   |
+| ~[[url]]~                | Link no desc                | ~[[file:notes.org]]~             | ~Link~       | TODO   |
+| ~[fn:1]~                 | Footnote ref                | ~See this[fn:1]~                 | ~FnRef~      | TODO   |
+| ~[fn:1] Text~            | Footnote def                | ~[fn:1] The note~                | ~FnDef~      | TODO   |
+| ~\vert a \vert b \vert~  | Table row                   | ~\vert 1 \vert 2 \vert~          | ~Table/Row~  | TODO   |
+| ~\vert---+---\vert~      | Table rule                  | ~\vert---+---\vert~              | ~Table/HR~   | TODO   |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| * Metadata & Misc        |                             |                                  |              |        |
+|--------------------------+-----------------------------+----------------------------------+--------------+--------|
+| ~#+key:~                 | Metadata(title, email, etc) | ~#+title: Plum~                  | ~Meta~       | TODO   |
+| ~SCHEDULED:~             | Planning                    | ~SCHEDULED: <2023-10-27>~        | ~Plan/Sched~ | TODO   |
+| ~DEADLINE:~              | Planning                    | ~DEADLINE: <2023-10-30>~         | ~Plan/Dead~  | TODO   |
+| ~<2023-10-27 Fri>~       | Active timestamp            | ~<2023-10-27 Fri>~               | ~Time/Act~   | TODO   |
+| ~[2023-10-27 Fri]~       | Inactive timestamp          | ~[2023-10-27 Fri]~               | ~Time/Inact~ | TODO   |
+| ~#~                      | Line comment                | ~# Hidden~                       | ~Comment~    | TODO   |
+
+
+* Introduction to the Parsers
+:PROPERTIES:
+:ID:       35b8e77d-67f8-48da-8ace-2758d59ad6d8
+:END:
+We convert org files into an /[[wikipedia:Abstract_syntax_tree][AST]]/ like tree, And then we render this tree to ~HTML~, ~.info~, etc.
+For example for this org file:
+#+BEGIN_SRC text :tangle no
+  * Hi hi
+    some text *doo*
+  * hah
+  ** The head
+     The text lorem morem boo /Plum/
+  ** List
+     + boo
+     + doo
+     + roo
+     + soo
+     Yep another text
+#+END_SRC
+
+This parser will generate an /AST/ that looks something like this:
+
+#+BEGIN_SRC scheme :tangle no
+(Org
+  (H1 "Hi hi"
+      (Paragraph "some text " (Bold "doo")))
+  (H1 "hah"
+      (H2 "The head"
+          (Paragraph "The text lorem morem boo " (Italic "Plum")))
+      (H2 "List"
+          (List (Item "boo")
+                (Item "doo")
+                (Item "roo")
+                (Item "soo"))
+          (Paragraph "Yep another text"))))
+#+END_SRC
+
+After so much researcher(yep I'm noob in CS) I found that we can use /[[wikipedia:Parser_combinator][Parser combinator]]/
+and/or /[[wikipedia:Recursive_descent_parser][Recursive descent]]/ methods instead of /[[wikipedia:Radix_tree][Radix tree]]/, etc. Why did I end-up with tree like /Radix/?
+At first glance, 'cause AST is a tree, I thought it's good to use a /Trie/ like /Radix/ to recognize
+/org/ markups characters, Like ~*~ for /Headings/ at first of the line, or same symbols in
+inline sentence for the /bold/ or /italic/ words. And as you know, this is wrong decision, because
+/Radix/ (and generally /Trie/) uses for finding like in auto-complete tools like search-engines,
+not for *parsing*! So in this situation /Parser combinator/ and /Recursive descent/ methods came to our
+aid before we started going in circles. We talk about this in implementation sections.
+
+First of all we should know what is a /parser/ is and what a /parser/ should to do?
+
+** What is a Parser?
+:PROPERTIES:
+:ID:       0190d4bc-8ffe-48c6-a714-fbad15402a58
+:END:
+According to [[wikipedia:Parsing][Wikipedia]], "A /parser/ is a software component that takes input data (typically text) and
+builds a *data structure*". In plain English, suppose that we have ~s = "Hello **World**"~ , in other words,
+~s~ is sequence of characters ( $s \in \Sigma^{\ast}$ ), And we want to know what does that means? For this purpose we use
+/parsers/. The parser use some Skadoosh spells and convert the text into a DS. This Skadoosh spell is called
+/Tokenization/. In /Tokenization/ phase raw texts might be converted into a few /Tokens/. That means
+~1+2~ maybe converts into something like this:
+#+begin_example :tangle no
+NUMBER(1)
+PLUS
+NUMBER(2)
+#+end_example
+
+And if you taste a little bit of the /[[wikipedia:Set_theory][set theory]]/, you can see this is actually a [[https://en.wikipedia.org/wiki/Finitary_relation][relation]] (or function)
+from $\Sigma^{\ast}$ [fn:1] to $\mathcal{T}^{\ast}$ (/Tokens/ set). Yep, now we know ~NUMBER~ is a /Token/.
+#+begin_example :tangle no
+L("123 + 45") = [NUMBER(123),PLUS,NUMBER(45)]
+#+end_example
+
+Now that we have separated the text into pieces (/Tokens/), How are we suppose know what that /Token/ means?
+In this phase, a /parser/ consumes an input sequence and determines its syntactic structure according to a
+/grammar/, usually producing a parse tree or an /AST/.
+Grammar is something like $expr ::= NUMBER \mid expr + expr$. That means it takes Number as expression,
+and each expression can be added to another expression. We will talk about /grammars/ and /parse tree/
+in the next sections.
+#+BEGIN_SRC scheme :tangle no
+;; raw text: 123 + 45
+;; lexer: NUMBER(123) PLUS NUMBER(45)
+;; and parser generates an Abstract Syntax Tree
+(+ 123
+   45) ;; Add(Number(123), Number(45))
+#+END_SRC
+
+** Grammar
+:PROPERTIES:
+:ID:       b3d04de5-8de2-45f4-8383-5b04201fb2d2
+:END:
+In the previous section we talked a little about /grammar/, /AST/ and this stuff. Here we wanna explain
+how we design /Parser/'s /grammar/, and why we did this.
+
+As spoken language have a grammar and principle, other languages like programming language or in this
+context markup languages, need to have a valid and correct grammar. You might say "this is markup, and
+markup languages do *NOT* need a grammar goofy!!!!"
+I'm sorry to tell this but yeah they need a grammar :) 'cause the /parser/ should know what he going
+to find and parse. And we define its structure with a grammar (so the parser knows exactly what to expect
+and how to parse it).
+For instance the parser needs to structure this /org/ file:
+
+#+BEGIN_SRC org
+  * Hello
+  some text
+  ** Child
+  more text
+  * Another heading
+#+END_SRC
+
+the parser does this (we call this the /parse tree/, and yep its similar to the /AST/.)
+#+BEGIN_SRC scheme :tangle no
+(heading Hello
+         (paragraph some text)
+         (heading child (paragraph more text)))
+(heading "Another heading")
+#+END_SRC
+
+And $\ast$ could have more meanings, like *Heading* or *List* item at the beginning of the line or in inline it
+could be *bold* word or it can just be a string without any special meaning. So grammars and syntax help
+us figure out what kind of chaos we're in and what to do about it.
+
+*** Grammar notation
+:PROPERTIES:
+:ID:       7f03e05c-9332-4f50-870e-e18a62c7c6bb
+:END:
+If you’re familiar with /[[wikipedia:Regular_expression][Regex]]/, the notations in grammar are the same in formal language grammars
+and in regex (actually, /regex/ is a formal language).
+
+| Notation  | Meaning               | Example                             |
+|-----------+-----------------------+-------------------------------------|
+| $::=$     | defining a rule       | $heading ::= \dots$                 |
+| $\vert$   | choice / or           | $block ::= heading \vert paragraph$ |
+| $\ast$    | zero or more          | $block\ast$                         |
+| $+$       | one or more           | $\text{list-item}+$                 |
+| $?$       | optional(zero or one) | $title?$                            |
+| $"\dots"$ | literal / terminal    | $"\#+"$                             |
+| $<\dots>$ | abstract thing        | $<whitespace>$                      |
+| $(\dots)$ | groups                | $(block \vert heading)$             |
+
+Let me explain what they are:
+
+**** Terminals, nonterminals and abstracts
+:PROPERTIES:
+:ID:       de8d2ff4-0844-467f-bd9e-9684e3683425
+:END:
++ Terminals:
+  They are some symbols & characters we see 'em in the text. And they don't break
+  or convert other things, like ~*~ or ~#+TITLE~ or ~some text~, etc.
++ Nonterminals:
+  Nonterminals are abstract things. We know they are, but we can't see. They get
+  colored by grammar rules like ~heading~, ~block~, ~paragraph~, ~<whitespace>~.
+
+**** other things
+:PROPERTIES:
+:ID:       a8eb46fc-cb2f-44dc-8e95-531b4f0c0af4
+:END:
++ Rule
+  Rules define "this thing is equal to $\dots$". That’s it! You’ll see examples in the next sections.
++ choice/or
+  this means you can choose this or that, but not both.
++ groups:
+  Groups let you treat several things as a single unit. For example, (block | heading)
+  means the choice applies to the whole group together.
+
+*** Grammar examples
+:PROPERTIES:
+:ID:       be007ff5-b6a7-426a-a047-783b2f66f594
+:END:
++ A block is either a heading, a paragraph, or a list.
+#+begin_example
+block ::= heading | paragraph | list
+#+end_example
+
++ A paragraph consists of one or more inline elements.
+#+begin_example
+paragraph ::= inline+
+#+end_example
+
+* Parser implementation
+:PROPERTIES:
+:header-args:scheme: :exports both :tangle ../lib/parser.scm :noweb yes :mkdirp yes
+:ID:       10c5332b-6886-481b-983b-816c6bcfa364
+:END:
+You can find the implementation and design of this parser, and a little about related things here.
+** Header and module export
+:PROPERTIES:
+:ID:       8a29f937-750a-4599-a6e9-01166c1ecc81
+:END:
+This is just import headers (like lexer no-byte-compile & copyright things), and export Parser's public
+functions.
+
+#+BEGIN_SRC scheme
+<<scm-header>>
+(define-module (plum parser)
+  #:export (parse))
+#+END_SRC
+
+#+RESULTS:
+
+** Inline parser
+:PROPERTIES:
+:ID:       62803f99-567c-44b8-97b3-e8a7ffe0426f
+:END:
+*** Grammar
+:PROPERTIES:
+:ID:       1f7b2a73-c487-4f1d-980f-9156e9f1514e
+:END:
+An /inline/ /grammar/ contains a few kinds of /syntax/ markers defined in the [[syntax-table][syntax table]].
+#+BEGIN_SRC text :tangle no
+inline ::= bold
+         | italic
+         | underline
+         | strike
+         | code
+         | verbatim
+         | latex
+         | text
+#+END_SRC
++ ~bold ::= "*" inline "*"~
++ ~italic ::= "/" inline "/"~
++ ~underline ::= "_" inline "_"~
++ ~strike  ::= "+" inline "+"~
++ ~verbatim ::= "=" text "="~
++ ~code ::= "~" text "~"~
++ ~latex ::= "$" text "$"~
++ ~text ::= character+~
+text represents ordinary text that does not begin an inline markup construct.
+
+*** Parser
+:PROPERTIES:
+:ID:       9e8c8dcb-2dd9-4e26-ab5b-1558ee770e73
+:END:
+*** Examples
+:PROPERTIES:
+:ID:       2e62f182-c384-430e-b261-a9f21459660e
+:END:
+
+** Block parser
+*** Block grammar
+:PROPERTIES:
+:ID:       2ecad529-032b-4cdc-9af6-194461665fd1
+:END:
+*** Lines
+:PROPERTIES:
+:ID:       3354e21c-9f45-4a02-b2de-48c6544babee
+:END:
+*** Block recognition
+:PROPERTIES:
+:ID:       4ab12193-511f-4100-a6fb-34a60d5e94ab
+:END:
+*** Heading hierarchy
+:PROPERTIES:
+:ID:       aaccf4de-9959-4306-8c63-51dd57a6036e
+:END:
+*** Parser
+:PROPERTIES:
+:ID:       e0f94475-21df-4a19-a110-d3ac489e4641
+:END:
+
+** Document parser
+*** Putting everything together
+:PROPERTIES:
+:ID:       d2482d2a-b3e2-42bd-943b-c056f256db93
+:END:
+* Appendix: Shared Headers
+:PROPERTIES:
+:header-args: :tangle no :exports none
+:END:
+# TODO: need to use _header.org file.
+#+NAME: scm-header
+#+BEGIN_SRC text
+;;; -*- lexical-binding: t; no-byte-compile: t -*-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; This file is the part of "Plum" project under the BSD-2-Clause License.    ;
+;;; Copyright (C) 2026 Komeil Parseh <komeilparseh@disroot.org> & Contributors.;
+;;;                                                                            ;
+;;; WARNING: This file is *automatically* generated by tangling an org file.   ;
+;;; DO NOT EDIT THIS FILE DIRECTLY. All changes must be made in the source file;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+#+END_SRC
+
+* Footnotes
+
+[fn:1] The superscript $\ast$ denotes the set of *all* finite strings that can be formed from
+$\mathcal{T}$ or $\Sigma$. In [[wikipedia:Formal_language_theory][Formal language theory]], this operator is called the /[[wikipedia:Kleene star][Kleene star]]/ (or /Kleene closure/).
+For example, the /Kleene star/ of $\mathcal{A} = \{a, b\}$ is:
+$$ \mathcal{A}^\ast = \{\epsilon, a, b, aa, ab, ba, bb, aaa, \dots\}$$
